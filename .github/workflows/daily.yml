@@ -1,16 +1,15 @@
-name: Daily Telegram Bot
+name: Daily News Bot
 
 on:
   schedule:
-    - cron: "0 7 * * *" # runs daily at 7:00 UTC
-  workflow_dispatch: # allows manual run from GitHub
+    - cron: "0 * * * *" # every hour
+  workflow_dispatch:
 
 jobs:
-  send_bot_message:
+  run-news-bot:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -19,10 +18,14 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
 
-      - name: Run bot
-        run: python learning_bot.py
+      - name: Run script
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python your_script_name.py

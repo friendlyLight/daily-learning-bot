@@ -1,25 +1,31 @@
-name: Daily News Bot
+name: News Analysis
 
 on:
   schedule:
-    - cron: "0 * * * *" # every hour
-  workflow_dispatch:
+    - cron: "0 * * * *" # every hour (change as needed)
+  workflow_dispatch: # allow manual trigger
 
 jobs:
-  run-news-bot:
+  run-analysis:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore processed URLs cache
+        uses: actions/cache@v4
+        with:
+          path: processed_urls.txt
+          key: processed-urls-cache
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run script
         env:
@@ -27,5 +33,10 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python learning_bot.py
+        run: python learning_bot.py
+
+      - name: Save processed URLs to cache
+        uses: actions/cache@v4
+        with:
+          path: processed_urls.txt
+          key: processed-urls-cache

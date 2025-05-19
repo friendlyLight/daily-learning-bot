@@ -364,11 +364,10 @@ def main():
         for group in KEYWORD_GROUPS:
             articles = fetch_articles_by_keywords(group)
             for article in articles:
-                for article in articles:
-                    url = article.get("url")
-                    if url and url not in seen_urls and url not in processed_urls:
-                        seen_urls.add(url)
-                        all_articles.append(article)
+                url = article.get("url")
+                if url and url not in seen_urls and url not in processed_urls:
+                    seen_urls.add(url)
+                    all_articles.append(article)
 
         if not all_articles:
             print("❌ No new articles found.")

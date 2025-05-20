@@ -6,6 +6,10 @@ import re
 import hashlib
 from datetime import datetime
 from newspaper import Article
+import pytz
+
+malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
+
 
 # ===== CONFIGURATION =====
 
@@ -17,7 +21,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MAX_ARTICLES = 30  # Max number of articles to analyze and send
 
 # Model to use - options include: "gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-flash", "gemini-1.5-pro"
-GEMINI_MODEL = "gemini-2.0-flash-lite"
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # Keywords to search (in lowercase)
 KEYWORD_GROUPS = [
@@ -187,7 +191,23 @@ def analyze_with_gemini(articles):
         # Get the text from the response
         analysis = response.text
         print("✅ Analysis received from Gemini")
-        return analysis
+
+        # Split the markdown into category blocks
+        sections = {"AI": "", "Automation": "", "Security": ""}
+        current_section = None
+
+        for line in analysis.splitlines():
+            if line.strip().lower().startswith("## ai"):
+                current_section = "AI"
+            elif line.strip().lower().startswith("## automation"):
+                current_section = "Automation"
+            elif line.strip().lower().startswith("## security"):
+                current_section = "Security"
+            elif current_section:
+                sections[current_section] += line + "\n"
+
+        return sections
+
     except Exception as e:
         raise Exception(f"Gemini API Error: {str(e)}")
 
@@ -223,7 +243,7 @@ def send_to_telegram(message, image_url=None):
             print(f"⚠️ Failed to send image: {photo_response.text}")
 
     # Step 2: Prepare HTML-formatted text
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    timestamp = datetime.now(malaysia_tz).strftime("%Y-%m-%d %H:%M")
     header = f"🔍 <b>AI & TECH NEWS MARKET ANALYSIS</b>\n<code>{timestamp}</code>\n\n"
 
     # Convert markdown-ish Gemini output to HTML
@@ -268,7 +288,7 @@ def send_to_telegram(message, image_url=None):
 
 def save_analysis(analysis, articles):
     """Save the analysis and articles to a file for reference"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(malaysia_tz).strftime("%Y-%m-%d %H:%M")
     directory = "news_analysis"
 
     # Create directory if it doesn't exist
@@ -329,15 +349,25 @@ def main():
         # Limit to MAX_ARTICLES total
         all_articles = all_articles[:MAX_ARTICLES]
 
-        analysis = analyze_with_gemini(all_articles)
-        save_analysis(analysis, all_articles)
+        analysis_sections = analyze_with_gemini(all_articles)
+        save_analysis("\n\n".join(analysis_sections.values()), all_articles)
 
-        print("📤 Sending analysis to Telegram...")
-        # Pick top article that has an image
-        top_image = next(
-            (a.get("urlToImage") for a in all_articles if a.get("urlToImage")), None
-        )
-        send_to_telegram(analysis, image_url=top_image)
+        print("📤 Sending category-specific analysis to Telegram...")
+
+        for category in ["AI", "Automation", "Security"]:
+            summary = analysis_sections.get(category, "").strip()
+            if not summary or "No major updates" in summary:
+                continue
+
+            # Get first image from matching articles in that category
+            top_image = None
+            for article in all_articles:
+                title = article.get("title", "").lower()
+                if category.lower() in summary.lower() and article.get("urlToImage"):
+                    top_image = article["urlToImage"]
+                    break
+
+            send_to_telegram(summary, image_url=top_image)
 
         save_processed_urls([article.get("url") for article in all_articles])
         print("✅ Process completed successfully!")

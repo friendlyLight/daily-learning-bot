@@ -5,6 +5,7 @@ import os
 import re
 import hashlib
 from datetime import datetime
+from newspaper import Article
 
 # ===== CONFIGURATION =====
 
@@ -62,6 +63,17 @@ def load_processed_urls():
         return set(line.strip() for line in f.readlines())
 
 
+def fetch_full_article(url):
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        return article.text
+    except Exception as e:
+        print(f"❌ Failed to fetch full content from {url}: {str(e)}")
+        return None
+
+
 def save_processed_urls(urls):
     with open("processed_urls.txt", "a") as f:
         for url in urls:
@@ -105,51 +117,51 @@ def analyze_with_gemini(articles):
         )
 
     # Prepare articles data for Gemini
-    articles_data = []
+    enriched_articles = []
+
+    print("📰 Enriching articles with full content...")
+
     for article in articles:
-        articles_data.append(
+        full_text = fetch_full_article(article["url"])
+        enriched_articles.append(
             {
                 "title": article.get("title", ""),
                 "description": article.get("description", ""),
                 "source": article.get("source", {}).get("name", ""),
                 "url": article.get("url", ""),
                 "published": article.get("publishedAt", ""),
+                "image": article.get("urlToImage", ""),
+                "content": full_text or "",
             }
         )
 
     # Create prompt for Gemini
     prompt = f"""
-        You are a highly skilled IT analyst. Your task is to process and distill a list of {len(articles)} technology news articles related to **AI**, **Automation**, and **Cybersecurity**.
+        You're a tech news analyst. Your job is to extract deep insights from a list of articles about AI, automation, and cybersecurity.
 
-        Here’s what I need:
-
-        🔹 Only include **highly relevant** and **high-impact** articles.
-        🔹 Skip generic or low-signal news (like company PR fluff, funding rounds unless strategic, minor product updates).
-        🔹 Categorize each article into one of: **AI**, **Automation**, or **Security**.
-        🔹 If unclear, choose the most relevant category — do not duplicate across multiple sections.
+        ### Task:
+        - Categorize each article as: **AI**, **Automation**, or **Security**.
+        - Read the full content to summarize **key developments**, **implications**, or **industry trends**.
+        - Provide only 1–2 impactful sentences per article.
+        - Add the link in markdown `[Title](url)` and show source.
+        - If a category has no important news, write “No major updates today.”
 
         ### Format:
 
-        - Group the content into these sections in this order:
-        - ## AI
-        - ## Automation
-        - ## Security
-
-        - For each article under the correct category, summarize like this:
-
+        ## AI  
         **[Article Title](URL)**  
-        _Summary in 1–2 sentences_  
+        _Summary_  
         <i>Source: SourceName</i>
 
-        ### Focus:
-        - Focus on **emerging trends**, **important research**, **market shifts**, **security threats**, **regulatory updates**, or **significant product developments**.
-        - If there are no good articles in a category, say "**No major updates today.**"
+        ## Automation  
+        ...
 
-        ---
+        ## Security  
+        ...
 
-        Here are the raw articles:
+        Here are the articles (with full content included):
 
-        {json.dumps(articles_data, indent=2)}
+        {json.dumps(articles, indent=2)}
 
         Only output in markdown as per the structure above. Do not add anything else.
         """
@@ -195,123 +207,62 @@ def format_articles_basic(articles):
     return "\n".join(lines)
 
 
-def send_to_telegram(message):
-    """Send message to Telegram with proper Markdown handling"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+def send_to_telegram(message, image_url=None):
+    """Send message (and optionally an image) to Telegram using HTML formatting."""
+    base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-    # Clean and escape problematic characters for Telegram's Markdown
-    # Escape special characters that could interfere with Markdown parsing
-    def clean_markdown(text):
-        # Escape special characters that break Telegram markdown
-        special_chars = [
-            "_",
-            "*",
-            "[",
-            "]",
-            "(",
-            ")",
-            "~",
-            "`",
-            ">",
-            "#",
-            "+",
-            "-",
-            "=",
-            "|",
-            "{",
-            "}",
-            ".",
-            "!",
-        ]
-        for char in special_chars:
-            # Don't escape if it's part of a markdown link structure
-            if char in ["[", "]", "(", ")"]:
-                continue
-            text = text.replace(char, "\\" + char)
+    # Step 1: Send the image first (if available)
+    if image_url:
+        photo_payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "photo": image_url,
+            "caption": "🖼️ Top Headline Image",
+        }
+        photo_response = requests.post(f"{base_url}/sendPhoto", data=photo_payload)
+        if photo_response.status_code != 200:
+            print(f"⚠️ Failed to send image: {photo_response.text}")
 
-        # Fix links - Telegram requires a protocol (http/https) for URLs
-        import re
-
-        # Find markdown links
-        link_pattern = r"\[([^\]]+)\]\(([^)]+)\)"
-
-        def fix_link(match):
-            link_text = match.group(1)
-            url = match.group(2)
-
-            # Ensure URL has protocol
-            if not (url.startswith("http://") or url.startswith("https://")):
-                url = "https://" + url
-
-            return f"[{link_text}]({url})"
-
-        text = re.sub(link_pattern, fix_link, text)
-        return text
-
-    # Process message to ensure compatibility with Telegram's Markdown
-    # For the title we'll use bold without markdown
+    # Step 2: Prepare HTML-formatted text
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    header = f"🔍 AI & TECH NEWS MARKET ANALYSIS\n<code>{timestamp}</code>\n\n"
+    header = f"🔍 <b>AI & TECH NEWS MARKET ANALYSIS</b>\n<code>{timestamp}</code>\n\n"
 
-    # For the analysis content, we'll use HTML mode instead of Markdown
-    # Convert basic markdown to HTML
-    content = message.replace(header, "")
-
-    # Replace markdown headers with HTML
+    # Convert markdown-ish Gemini output to HTML
+    content = message
     content = re.sub(r"## (.*?)(\n|$)", r"<b>\1</b>\n", content)
     content = re.sub(r"# (.*?)(\n|$)", r"<b>\1</b>\n", content)
-
-    # Replace markdown bold with HTML bold
     content = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", content)
-    content = re.sub(r"\*(.*?)\*", r"<b>\1</b>", content)
-
-    # Replace markdown italic with HTML italic
     content = re.sub(r"_(.*?)_", r"<i>\1</i>", content)
-
-    # Replace markdown links with HTML links
     content = re.sub(r"\[(.*?)\]\((.*?)\)", r'<a href="\2">\1</a>', content)
 
-    # Create the full message with HTML formatting
     html_message = header + content
 
-    # Telegram messages have character limits, split if necessary
-    max_length = 4096  # Telegram's max message length
-
+    # Step 3: Split message if too long
+    max_length = 4096
     if len(html_message) <= max_length:
-        messages = [html_message]
+        parts = [html_message]
     else:
-        # Simple splitting by finding paragraph boundaries
-        messages = []
-        current_message = ""
-        paragraphs = html_message.split("\n\n")
-
-        for paragraph in paragraphs:
-            if len(current_message) + len(paragraph) + 2 <= max_length:
-                if current_message:
-                    current_message += "\n\n" + paragraph
-                else:
-                    current_message = paragraph
+        parts = []
+        current = ""
+        for paragraph in html_message.split("\n\n"):
+            if len(current) + len(paragraph) + 2 <= max_length:
+                current += "\n\n" + paragraph if current else paragraph
             else:
-                messages.append(current_message)
-                current_message = paragraph
+                parts.append(current)
+                current = paragraph
+        if current:
+            parts.append(current)
 
-        if current_message:
-            messages.append(current_message)
-
-    # Send each message part
-    for i, msg_part in enumerate(messages):
+    # Step 4: Send all parts
+    for i, msg in enumerate(parts):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": msg_part,
-            "parse_mode": "HTML",  # Using HTML instead of Markdown
-            "disable_web_page_preview": True,  # Set to False if you want link previews
+            "text": msg,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False,
         }
-
-        response = requests.post(url, data=payload)
+        response = requests.post(f"{base_url}/sendMessage", data=payload)
         if response.status_code != 200:
-            raise Exception(f"Telegram Error: {response.status_code}, {response.text}")
-
-        # Slight delay to avoid rate limits
+            print(f"❌ Failed to send message part {i+1}: {response.text}")
         time.sleep(1)
 
 
@@ -382,7 +333,11 @@ def main():
         save_analysis(analysis, all_articles)
 
         print("📤 Sending analysis to Telegram...")
-        send_to_telegram(f"🔍 AI & TECH NEWS MARKET ANALYSIS\n\n{analysis}")
+        # Pick top article that has an image
+        top_image = next(
+            (a.get("urlToImage") for a in all_articles if a.get("urlToImage")), None
+        )
+        send_to_telegram(analysis, image_url=top_image)
 
         save_processed_urls([article.get("url") for article in all_articles])
         print("✅ Process completed successfully!")
